@@ -1,11 +1,14 @@
 """
 =============================================================================
-Engineering Data Systems Pipeline — ENV-02: Aerosol Optical Depth vs. Humidity
+Engineering Data Systems Pipeline — AIP-03: Confidence Calibration
 Course: Computer Programming 1 | Academic Year: 2026
-Student: Marv Andrew S. Inocencio | ID: TUPM-25-0351
-Dataset: Global Air Quality Data (Kaggle)
-File Used: global_air_quality_data_10000.csv (renamed to dataset_original.csv)
-Unique Filter: Country == "India" (540 records — India-specific air quality slice)
+Student: John Carl Misalang | ID: 25-0478
+Dataset: Hiring Decision Dataset (Algorithmic Bias in Recruitment)
+File Used: data.csv (renamed to dataset_original.csv)
+Unique Filter: 
+  Cohort A (Younger): Age < 30
+  Cohort B (Older/High-Exp): Age > 40 & ExperienceYears > 10
+  Comparing hiring rates between cohorts to analyze confidence calibration bias
 =============================================================================
 """
 
@@ -13,6 +16,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
+import plotly.express as px
 import os
 import warnings
 warnings.filterwarnings("ignore")
@@ -21,21 +25,23 @@ os.makedirs("outputs", exist_ok=True)
 os.makedirs("data", exist_ok=True)
 
 
-class AerosolHumidityPipeline:
+class ConfidenceCalibrationPipeline:
     """
-    OOP Pipeline for ENV-02: Aerosol Optical Depth vs. Humidity Analysis.
+    OOP Pipeline for AIP-03: Confidence Calibration Analysis.
     5 Modules: ingest_data, clean_data, analyze_data,
                visualize_static, visualize_animated
     """
 
     def __init__(self, filepath: str):
-        self.filepath = filepath
-        self.raw_df   = None
-        self.clean_df = None
-        self.stats    = {}
+        self.filepath  = filepath
+        self.raw_df    = None
+        self.clean_df  = None
+        self.cohort_a  = None
+        self.cohort_b  = None
+        self.stats     = {}
         print("=" * 65)
-        print("  ENV-02 Aerosol Optical Depth vs. Humidity Pipeline")
-        print("  Student: Marv Andrew S. Inocencio | ID: TUPM-25-0351")
+        print("  AIP-03 Confidence Calibration Pipeline")
+        print("  Student: John Carl Misalang | ID: 25-0478")
         print("=" * 65)
 
     # =========================================================================
@@ -46,6 +52,7 @@ class AerosolHumidityPipeline:
         try:
             df = pd.read_csv(self.filepath)
             print(f"  Loaded {len(df):,} total records.")
+            print(f"  Columns: {list(df.columns)}")
         except FileNotFoundError:
             raise FileNotFoundError(
                 f"File not found: {self.filepath}\n"
@@ -54,14 +61,29 @@ class AerosolHumidityPipeline:
         except Exception as e:
             raise RuntimeError(f"Could not load file: {e}")
 
-        # UNIQUE FILTER (Inocencio TUPM-25-0351):
-        # Keep only rows where Country == "India"
-        # India has the highest aerosol pollution load in the world,
-        # making it the ideal geographic slice for ENV-02 analysis.
+        # Standardize column names
+        df.columns = df.columns.str.strip()
+
+        # UNIQUE FILTER (Misalang 25-0478):
+        # Cohort A: Younger candidates (Age < 30)
+        # Cohort B: Older high-experience candidates (Age > 40 & ExperienceYears > 10)
+        # This isolates two distinct demographic groups for hiring bias analysis
         try:
-            self.raw_df = df[df["Country"] == "India"].reset_index(drop=True)
-            print(f"  Unique Filter: Country == 'India'")
-            print(f"  Records after filter: {len(self.raw_df):,}")
+            df["Age"]             = pd.to_numeric(df["Age"],             errors="coerce")
+            df["ExperienceYears"] = pd.to_numeric(df["ExperienceYears"], errors="coerce")
+
+            cohort_a = df[df["Age"] < 30].copy()
+            cohort_b = df[(df["Age"] > 40) & (df["ExperienceYears"] > 10)].copy()
+
+            cohort_a["Cohort"] = "Cohort A (Age < 30)"
+            cohort_b["Cohort"] = "Cohort B (Age > 40 & Exp > 10)"
+
+            self.raw_df = pd.concat([cohort_a, cohort_b]).reset_index(drop=True)
+            print(f"  Unique Filter Applied:")
+            print(f"    Cohort A (Age < 30):              {len(cohort_a):,} records")
+            print(f"    Cohort B (Age > 40 & Exp > 10):   {len(cohort_b):,} records")
+            print(f"    Combined:                          {len(self.raw_df):,} records")
+
         except Exception as e:
             raise RuntimeError(f"Filter failed: {e}")
 
@@ -81,16 +103,19 @@ class AerosolHumidityPipeline:
             df.drop_duplicates(inplace=True)
             print(f"  Duplicates removed: {before - len(df)}")
 
-            key_cols = ["City", "Date", "PM2.5", "PM10", "NO2",
-                        "SO2", "CO", "O3", "Temperature", "Humidity", "Wind Speed"]
+            # Select key columns for analysis
+            key_cols = [
+                "Age", "ExperienceYears", "InterviewScore",
+                "SkillScore", "PersonalityScore", "HiringDecision",
+                "Cohort"
+            ]
             key_cols = [c for c in key_cols if c in df.columns]
             df = df[key_cols].copy()
 
-            numeric_cols = ["PM2.5", "PM10", "NO2", "SO2", "CO",
-                            "O3", "Temperature", "Humidity", "Wind Speed"]
+            # Coerce numeric columns
+            numeric_cols = [c for c in key_cols if c != "Cohort"]
             for col in numeric_cols:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors="coerce")
+                df[col] = pd.to_numeric(df[col], errors="coerce")
 
             before_null = len(df)
             df.dropna(subset=numeric_cols, inplace=True)
@@ -101,17 +126,30 @@ class AerosolHumidityPipeline:
         except Exception as e:
             raise RuntimeError(f"Cleaning failed: {e}")
 
-        # Aerosol Proxy Index (API):
-        # PM2.5 and PM10 are ground-level proxies for Aerosol Optical Depth.
-        # Normalized weighted sum — higher value = denser aerosol loading.
-        df["Aerosol_Proxy"] = (0.6 * df["PM2.5"] + 0.4 * df["PM10"])
+        # Compute Confidence Calibration Score
+        # Higher interview + skill + personality = higher model confidence
+        # We compare this against actual hiring decision to measure calibration
+        if all(c in df.columns for c in ["InterviewScore", "SkillScore", "PersonalityScore"]):
+            int_arr  = np.array(df["InterviewScore"])
+            sk_arr   = np.array(df["SkillScore"])
+            per_arr  = np.array(df["PersonalityScore"])
+            df["Confidence_Score"] = (
+                (int_arr / 100) * 0.4 +
+                (sk_arr  / 100) * 0.35 +
+                (per_arr / 100) * 0.25
+            )
+            print("  Computed: Confidence_Score column added")
 
-        # Humidity-Aerosol Interaction Score:
-        # Hygroscopic growth — aerosols absorb moisture and swell,
-        # increasing their optical depth. Higher humidity amplifies aerosol effect.
-        df["Hygro_Score"] = df["Aerosol_Proxy"] * (df["Humidity"] / 100.0)
+        # Calibration Error = |Confidence_Score - HiringDecision|
+        if "Confidence_Score" in df.columns and "HiringDecision" in df.columns:
+            df["Calibration_Error"] = np.abs(
+                df["Confidence_Score"] - df["HiringDecision"]
+            )
+            print("  Computed: Calibration_Error column added")
 
         self.clean_df = df
+        self.cohort_a = df[df["Cohort"] == "Cohort A (Age < 30)"]
+        self.cohort_b = df[df["Cohort"] == "Cohort B (Age > 40 & Exp > 10)"]
         self.clean_df.to_csv("data/dataset_cleaned.csv", index=False)
         print("  Saved to data/dataset_cleaned.csv")
         return self.clean_df
@@ -125,14 +163,16 @@ class AerosolHumidityPipeline:
         stats = {}
 
         try:
-            target_cols = ["PM2.5", "PM10", "Humidity",
-                           "Aerosol_Proxy", "Hygro_Score", "Temperature"]
-            target_cols = [c for c in target_cols if c in df.columns]
+            target_cols = [c for c in [
+                "Confidence_Score", "Calibration_Error",
+                "InterviewScore", "SkillScore",
+                "PersonalityScore", "HiringDecision"
+            ] if c in df.columns]
 
-            # --- Descriptive Statistics ---
+            # Descriptive Statistics
             desc = {}
             for col in target_cols:
-                arr = np.array(df[col].dropna())
+                arr = np.array(df[col])
                 desc[col] = {
                     "mean"    : np.mean(arr),
                     "median"  : np.median(arr),
@@ -143,64 +183,63 @@ class AerosolHumidityPipeline:
                 }
             stats["descriptive"] = desc
 
-            # --- Skewness (Fisher-Pearson adjusted) ---
+            # Skewness
             def skewness(arr):
                 n = len(arr)
                 m = np.mean(arr)
                 s = np.std(arr, ddof=1)
-                if s == 0 or n < 3:
-                    return 0.0
-                return (n / ((n - 1) * (n - 2))) * np.sum(((arr - m) / s) ** 3)
+                if s == 0:
+                    return 0
+                return (n / ((n-1)*(n-2))) * np.sum(((arr - m) / s) ** 3)
 
             stats["skewness"] = {
-                col: skewness(np.array(df[col].dropna())) for col in target_cols
+                col: skewness(np.array(df[col])) for col in target_cols
             }
 
-            # --- Outlier Detection (IQR Method) ---
+            # Outlier Detection (IQR)
             outliers = {}
             for col in target_cols:
-                arr = np.array(df[col].dropna())
+                arr = np.array(df[col])
                 Q1  = np.percentile(arr, 25)
                 Q3  = np.percentile(arr, 75)
                 IQR = Q3 - Q1
                 low = Q1 - 1.5 * IQR
                 up  = Q3 + 1.5 * IQR
                 outliers[col] = {
-                    "Q1"          : Q1,
-                    "Q3"          : Q3,
-                    "IQR"         : IQR,
-                    "lower_fence" : low,
-                    "upper_fence" : up,
-                    "n_outliers"  : int(np.sum((arr < low) | (arr > up)))
+                    "Q1": Q1, "Q3": Q3, "IQR": IQR,
+                    "lower_fence": low, "upper_fence": up,
+                    "n_outliers": int(np.sum((arr < low) | (arr > up)))
                 }
             stats["outliers"] = outliers
 
-            # --- Pearson Correlation Matrix ---
-            clean_num   = df[target_cols].dropna()
-            corr_matrix = np.corrcoef(clean_num.values.T)
+            # Pearson Correlation
+            corr_matrix = np.corrcoef(df[target_cols].values.T)
             stats["correlation_matrix"] = corr_matrix
             stats["correlation_cols"]   = target_cols
 
-            # --- Comparative Group Analysis ---
-            # High Humidity (>=55%) vs Low Humidity (<55%) groups
-            # split at approximate median humidity
-            hum_arr      = np.array(df["Humidity"])
-            median_hum   = np.median(hum_arr)
-            group_low    = df[df["Humidity"] <  median_hum]
-            group_high   = df[df["Humidity"] >= median_hum]
-
+            # Cohort Comparative Analysis
             comp = {}
-            for col in ["PM2.5", "PM10", "Aerosol_Proxy", "Hygro_Score"]:
+            for col in ["Confidence_Score", "Calibration_Error",
+                        "InterviewScore", "SkillScore", "HiringDecision"]:
                 if col not in df.columns:
                     continue
+                arr_a = np.array(self.cohort_a[col].dropna())
+                arr_b = np.array(self.cohort_b[col].dropna())
                 comp[col] = {
-                    "low_hum_mean" : np.mean(np.array(group_low[col].dropna())),
-                    "high_hum_mean": np.mean(np.array(group_high[col].dropna())),
-                    "low_hum_std"  : np.std(np.array(group_low[col].dropna()),  ddof=1),
-                    "high_hum_std" : np.std(np.array(group_high[col].dropna()), ddof=1),
+                    "cohort_a_mean": np.mean(arr_a),
+                    "cohort_b_mean": np.mean(arr_b),
+                    "cohort_a_std" : np.std(arr_a, ddof=1),
+                    "cohort_b_std" : np.std(arr_b, ddof=1),
                 }
             stats["comparative"] = comp
-            stats["median_hum"]  = median_hum
+
+            # Hiring rates per cohort
+            hr_a = np.mean(np.array(self.cohort_a["HiringDecision"]))
+            hr_b = np.mean(np.array(self.cohort_b["HiringDecision"]))
+            stats["hiring_rate_a"] = hr_a
+            stats["hiring_rate_b"] = hr_b
+            print(f"  Cohort A Hiring Rate: {hr_a:.4f} ({hr_a*100:.1f}%)")
+            print(f"  Cohort B Hiring Rate: {hr_b:.4f} ({hr_b*100:.1f}%)")
 
         except Exception as e:
             raise RuntimeError(f"Analysis failed: {e}")
@@ -212,30 +251,23 @@ class AerosolHumidityPipeline:
     def _print_summary(self):
         print("\n  ── DESCRIPTIVE STATISTICS ───────────────────────────────────")
         for col, vals in self.stats["descriptive"].items():
-            print(f"  {col:<20}  mean={vals['mean']:>9.4f}  "
-                  f"std={vals['std']:>9.4f}  var={vals['variance']:>12.4f}")
+            print(f"\n  [{col}]")
+            for k, v in vals.items():
+                print(f"      {k:>10}: {v:>12.4f}")
         print("\n  ── SKEWNESS ─────────────────────────────────────────────────")
-        for col, val in self.stats["skewness"].items():
-            print(f"  {col:<20}  skew={val:.4f}")
-        print("\n  ── OUTLIER DETECTION (IQR) ──────────────────────────────────")
-        for col, vals in self.stats["outliers"].items():
-            print(f"  {col:<20}  IQR={vals['IQR']:>8.2f}  "
-                  f"outliers={vals['n_outliers']}")
-        print(f"\n  Humidity split (median): {self.stats['median_hum']:.2f}%")
-        print("\n  ── COMPARATIVE: LOW vs HIGH HUMIDITY GROUP ──────────────────")
-        for col, vals in self.stats["comparative"].items():
-            print(f"  {col:<20}  "
-                  f"Low Hum Mean={vals['low_hum_mean']:>8.3f}  "
-                  f"High Hum Mean={vals['high_hum_mean']:>8.3f}")
+        for col, s in self.stats["skewness"].items():
+            print(f"      {col:>22}: {s:>10.4f}")
+        print("\n  ── OUTLIERS (IQR method) ────────────────────────────────────")
+        for col, o in self.stats["outliers"].items():
+            print(f"      {col:>22}: {o['n_outliers']} outliers | IQR = {o['IQR']:.4f}")
+        print("  ─────────────────────────────────────────────────────────────\n")
 
     # =========================================================================
-    # MODULE 4: STATIC VISUALIZATIONS (3 plots)
+    # MODULE 4: STATIC VISUALIZATIONS (3 charts)
     # =========================================================================
     def visualize_static(self):
-        print("\n[4/5] GENERATING STATIC VISUALIZATIONS...")
+        print("[4/5] GENERATING STATIC VISUALIZATIONS...")
         df  = self.clean_df
-
-        # Color palette
         BG  = "#0d1117"
         PAN = "#161b22"
         C1  = "#58a6ff"
@@ -252,20 +284,18 @@ class AerosolHumidityPipeline:
             for spine in ax.spines.values():
                 spine.set_edgecolor(BDR)
 
-        # ── Plot 1: Histogram of Aerosol Proxy Index ──────────────────────────
+        # Plot 1: Histogram of Confidence Score by Cohort
         fig1, ax1 = plt.subplots(figsize=(10, 5))
         style_ax(ax1, fig1)
-        arr = np.array(df["Aerosol_Proxy"].dropna())
-        ax1.hist(arr, bins=35, color=C1, edgecolor=BG, alpha=0.85)
-        ax1.axvline(np.mean(arr),   color=C2, linestyle="--", linewidth=2,
-                    label=f"Mean = {np.mean(arr):.2f}")
-        ax1.axvline(np.median(arr), color=C3, linestyle=":",  linewidth=2,
-                    label=f"Median = {np.median(arr):.2f}")
-        ax1.set_title(
-            "Distribution of Aerosol Proxy Index (India)\nInocencio | TUPM-25-0351",
-            color=TXT, fontsize=13, fontweight="bold"
-        )
-        ax1.set_xlabel("Aerosol Proxy Index (weighted PM2.5 + PM10)", color=TXT)
+        arr_a = np.array(self.cohort_a["Confidence_Score"].dropna())
+        arr_b = np.array(self.cohort_b["Confidence_Score"].dropna())
+        ax1.hist(arr_a, bins=20, color=C1, alpha=0.7, label="Cohort A (Age < 30)")
+        ax1.hist(arr_b, bins=20, color=C2, alpha=0.7, label="Cohort B (Age > 40 & Exp > 10)")
+        ax1.axvline(np.mean(arr_a), color=C1, linestyle="--", linewidth=2)
+        ax1.axvline(np.mean(arr_b), color=C2, linestyle="--", linewidth=2)
+        ax1.set_title("Distribution of Confidence Score by Cohort\nMisalang | 25-0478",
+                      color=TXT, fontsize=13, fontweight="bold")
+        ax1.set_xlabel("Confidence Score", color=TXT)
         ax1.set_ylabel("Frequency", color=TXT)
         ax1.legend(facecolor=PAN, labelcolor=TXT)
         plt.tight_layout()
@@ -274,43 +304,36 @@ class AerosolHumidityPipeline:
         plt.close(fig1)
         print("  Saved: outputs/plot1_histogram.png")
 
-        # ── Plot 2: Boxplot — Low Humidity vs High Humidity Groups ────────────
-        median_hum = self.stats["median_hum"]
-        low_grp    = df[df["Humidity"] <  median_hum]["Aerosol_Proxy"].values
-        high_grp   = df[df["Humidity"] >= median_hum]["Aerosol_Proxy"].values
-
+        # Plot 2: Boxplot — Hiring Rate Cohort A vs B
         fig2, ax2 = plt.subplots(figsize=(9, 6))
         style_ax(ax2, fig2)
+        data_a = np.array(self.cohort_a["Confidence_Score"].dropna())
+        data_b = np.array(self.cohort_b["Confidence_Score"].dropna())
         bp = ax2.boxplot(
-            [low_grp, high_grp],
-            labels=[f"Low Humidity\n(<{median_hum:.1f}%)",
-                    f"High Humidity\n(≥{median_hum:.1f}%)"],
+            [data_a, data_b],
+            labels=["Cohort A\n(Age < 30)", "Cohort B\n(Age > 40 & Exp > 10)"],
             patch_artist=True,
-            medianprops=dict(color=C2, linewidth=2.5),
+            medianprops=dict(color=C3, linewidth=2.5),
             whiskerprops=dict(color=TXT),
             capprops=dict(color=TXT),
-            flierprops=dict(marker="o", color=C3, alpha=0.5, markersize=4)
+            flierprops=dict(marker="o", color=C4, alpha=0.5, markersize=4)
         )
         bp["boxes"][0].set_facecolor("#1e3a5f")
         bp["boxes"][1].set_facecolor("#3b1f2b")
         for box in bp["boxes"]:
             box.set_edgecolor(C1)
-        ax2.set_title(
-            "Aerosol Proxy: Low Humidity vs High Humidity Groups (India)\n"
-            "Inocencio | TUPM-25-0351",
-            color=TXT, fontsize=13, fontweight="bold"
-        )
-        ax2.set_ylabel("Aerosol Proxy Index", color=TXT)
+        ax2.set_title("Boxplot: Confidence Score — Cohort A vs Cohort B\nMisalang | 25-0478",
+                      color=TXT, fontsize=13, fontweight="bold")
+        ax2.set_ylabel("Confidence Score", color=TXT)
         plt.tight_layout()
         fig2.savefig("outputs/plot2_boxplot.png", dpi=150,
                      bbox_inches="tight", facecolor=BG)
         plt.close(fig2)
         print("  Saved: outputs/plot2_boxplot.png")
 
-        # ── Plot 3: Pearson Correlation Heatmap ───────────────────────────────
+        # Plot 3: Correlation Heatmap
         corr_cols   = self.stats["correlation_cols"]
         corr_matrix = self.stats["correlation_matrix"]
-
         fig3, ax3 = plt.subplots(figsize=(9, 7))
         style_ax(ax3, fig3)
         im = ax3.imshow(corr_matrix, cmap="coolwarm", vmin=-1, vmax=1)
@@ -327,46 +350,13 @@ class AerosolHumidityPipeline:
                 val = corr_matrix[i, j]
                 ax3.text(j, i, f"{val:.2f}", ha="center", va="center",
                          color="white" if abs(val) > 0.4 else "#888", fontsize=8)
-        ax3.set_title(
-            "Pearson Correlation Heatmap — Air Quality Variables (India)\n"
-            "Inocencio | TUPM-25-0351",
-            color=TXT, fontsize=13, fontweight="bold"
-        )
+        ax3.set_title("Pearson Correlation Heatmap\nMisalang | 25-0478",
+                      color=TXT, fontsize=13, fontweight="bold")
         plt.tight_layout()
         fig3.savefig("outputs/plot3_heatmap.png", dpi=150,
                      bbox_inches="tight", facecolor=BG)
         plt.close(fig3)
         print("  Saved: outputs/plot3_heatmap.png")
-
-        # ── Plot 4 (bonus): Scatter — Humidity vs Aerosol Proxy ──────────────
-        fig4, ax4 = plt.subplots(figsize=(10, 6))
-        style_ax(ax4, fig4)
-        hum = np.array(df["Humidity"].dropna())
-        aer = np.array(df["Aerosol_Proxy"].dropna())
-        sc  = ax4.scatter(hum, aer, c=np.array(df["PM2.5"].dropna()),
-                          cmap="plasma", alpha=0.6, s=25, edgecolors="none")
-        cbar4 = plt.colorbar(sc, ax=ax4)
-        cbar4.set_label("PM2.5 (µg/m³)", color=TXT)
-        cbar4.ax.yaxis.set_tick_params(color=TXT)
-        plt.setp(cbar4.ax.yaxis.get_ticklabels(), color=TXT)
-
-        # Linear trend line
-        m, b = np.polyfit(hum, aer, 1)
-        x_line = np.linspace(hum.min(), hum.max(), 200)
-        ax4.plot(x_line, m * x_line + b, color=C2, linewidth=2,
-                 linestyle="--", label=f"Trend: y={m:.2f}x+{b:.1f}")
-        ax4.set_title(
-            "Humidity vs Aerosol Proxy Index (India)\nInocencio | TUPM-25-0351",
-            color=TXT, fontsize=13, fontweight="bold"
-        )
-        ax4.set_xlabel("Relative Humidity (%)", color=TXT)
-        ax4.set_ylabel("Aerosol Proxy Index", color=TXT)
-        ax4.legend(facecolor=PAN, labelcolor=TXT)
-        plt.tight_layout()
-        fig4.savefig("outputs/plot4_scatter_humidity_aerosol.png", dpi=150,
-                     bbox_inches="tight", facecolor=BG)
-        plt.close(fig4)
-        print("  Saved: outputs/plot4_scatter_humidity_aerosol.png")
 
     # =========================================================================
     # MODULE 5: ANIMATED VISUALIZATIONS (2 animations)
@@ -381,8 +371,8 @@ class AerosolHumidityPipeline:
         TXT = "#e6edf3"
         BDR = "#30363d"
 
-        # ── Animation 1: Rolling Mean of Aerosol Proxy (Matplotlib GIF) ──────
-        arr    = np.array(df["Aerosol_Proxy"].dropna())
+        # Animation 1: Rolling Mean of Calibration Error (Matplotlib GIF)
+        arr    = np.array(df["Calibration_Error"].dropna())[:400]
         window = 20
         roll   = np.convolve(arr, np.ones(window) / window, mode="valid")
         x_raw  = np.arange(len(arr))
@@ -395,98 +385,70 @@ class AerosolHumidityPipeline:
         for sp in ax_a.spines.values():
             sp.set_edgecolor(BDR)
         ax_a.plot(x_raw, arr, color="#30363d", linewidth=0.8,
-                  alpha=0.5, label="Raw Aerosol Proxy")
+                  alpha=0.5, label="Raw Calibration Error")
         line_m, = ax_a.plot([], [], color=C1, linewidth=2.2,
-                             label=f"Rolling Mean ({window}-window)")
+                             label="Rolling Mean (20-window)")
         ax_a.set_xlim(0, len(arr))
-        ax_a.set_ylim(max(0, arr.min() - 10), arr.max() + 10)
-        ax_a.set_title(
-            "Animated Rolling Mean — Aerosol Proxy Index (India)\n"
-            "Inocencio | TUPM-25-0351",
-            color=TXT, fontsize=13, fontweight="bold"
-        )
+        ax_a.set_ylim(0, arr.max() + 0.05)
+        ax_a.set_title("Animated Rolling Mean — Calibration Error\nMisalang | 25-0478",
+                        color=TXT, fontsize=13, fontweight="bold")
         ax_a.set_xlabel("Record Index", color=TXT)
-        ax_a.set_ylabel("Aerosol Proxy Index", color=TXT)
+        ax_a.set_ylabel("Calibration Error", color=TXT)
         ax_a.legend(facecolor=PAN, labelcolor=TXT)
 
-        def init_a():
+        def init():
             line_m.set_data([], [])
             return (line_m,)
 
-        def update_a(frame):
-            line_m.set_data(x_roll[:frame + 1], roll[:frame + 1])
+        def update(frame):
+            line_m.set_data(x_roll[:frame+1], roll[:frame+1])
             return (line_m,)
 
         anim1 = animation.FuncAnimation(
-            fig_a, update_a, frames=min(len(roll), 180),
-            init_func=init_a, blit=True, interval=30
+            fig_a, update, frames=min(len(roll), 180),
+            init_func=init, blit=True, interval=30
         )
         anim1.save("outputs/animation1_rolling_mean.gif",
                    writer="pillow", fps=25, dpi=110)
         plt.close(fig_a)
         print("  Saved: outputs/animation1_rolling_mean.gif")
 
-        # ── Animation 2: Scatter reveal — Humidity vs Hygro Score ─────────────
-        from matplotlib.patches import Patch
-
-        plot_df = df[["Humidity", "Hygro_Score"]].dropna().reset_index(drop=True)
-        median_hum = self.stats["median_hum"]
-        hum_vals   = plot_df["Humidity"].values
-        hsc_vals   = plot_df["Hygro_Score"].values
-        n          = len(hum_vals)
-        step       = max(1, n // 60)
-        colors_arr = np.where(hum_vals >= median_hum, C2, C1)
-
-        fig_b, ax_b = plt.subplots(figsize=(10, 6))
-        fig_b.patch.set_facecolor(BG)
-        ax_b.set_facecolor(PAN)
-        ax_b.tick_params(colors=TXT)
-        for sp in ax_b.spines.values():
-            sp.set_edgecolor(BDR)
-        ax_b.set_xlim(hum_vals.min() - 2, hum_vals.max() + 2)
-        ax_b.set_ylim(hsc_vals.min() - 2, hsc_vals.max() + 2)
-        ax_b.set_title(
-            "Animated Humidity vs Hygroscopic Aerosol Score — Cluster Analysis\n"
-            "Inocencio | TUPM-25-0351",
-            color=TXT, fontsize=13, fontweight="bold"
+        # Animation 2: Scatter — Confidence Score vs Hiring Decision (Plotly)
+        plot_df = df[["Confidence_Score", "HiringDecision",
+                      "Cohort", "InterviewScore"]].copy().dropna()
+        plot_df["frame"] = (
+            np.arange(len(plot_df)) // max(1, len(plot_df) // 25)
         )
-        ax_b.set_xlabel("Relative Humidity (%)", color=TXT)
-        ax_b.set_ylabel("Hygroscopic Aerosol Score", color=TXT)
-        legend_elements = [
-            Patch(facecolor=C1, label=f"Low Humidity (<{median_hum:.1f}%)"),
-            Patch(facecolor=C2, label=f"High Humidity (≥{median_hum:.1f}%)"),
-        ]
-        ax_b.legend(handles=legend_elements, facecolor=PAN, labelcolor=TXT)
 
-        scat       = ax_b.scatter([], [], s=35, alpha=0.7)
-        frame_text = ax_b.text(0.02, 0.96, "", transform=ax_b.transAxes,
-                               color=TXT, fontsize=9, va="top")
-
-        frames_b = list(range(step, n + 1, step))
-        if not frames_b or frames_b[-1] < n:
-            frames_b.append(n)
-
-        def init_b():
-            scat.set_offsets(np.empty((0, 2)))
-            scat.set_color([])
-            frame_text.set_text("")
-            return scat, frame_text
-
-        def update_b(i):
-            idx = frames_b[i]
-            scat.set_offsets(np.column_stack([hum_vals[:idx], hsc_vals[:idx]]))
-            scat.set_color(colors_arr[:idx])
-            frame_text.set_text(f"Records: {idx}/{n}")
-            return scat, frame_text
-
-        anim2 = animation.FuncAnimation(
-            fig_b, update_b, frames=len(frames_b),
-            init_func=init_b, blit=True, interval=60
+        fig_b = px.scatter(
+            plot_df,
+            x="Confidence_Score",
+            y="HiringDecision",
+            color="Cohort",
+            animation_frame="frame",
+            size="InterviewScore",
+            size_max=15,
+            color_discrete_map={
+                "Cohort A (Age < 30)":          "#58a6ff",
+                "Cohort B (Age > 40 & Exp > 10)": "#f78166"
+            },
+            title="Animated Confidence Score vs Hiring Decision — Cohort Comparison<br>"
+                  "<sup>AIP-03: Misalang 25-0478</sup>",
+            labels={
+                "Confidence_Score": "Confidence Score",
+                "HiringDecision":   "Hiring Decision (0=No, 1=Yes)"
+            },
+            template="plotly_dark",
+            opacity=0.75,
         )
-        anim2.save("outputs/animation2_scatter_cluster.gif",
-                   writer="pillow", fps=15, dpi=110)
-        plt.close(fig_b)
-        print("  Saved: outputs/animation2_scatter_cluster.gif")
+        fig_b.update_layout(
+            paper_bgcolor="#0d1117",
+            plot_bgcolor="#161b22",
+            font_color="#e6edf3",
+            title_font_size=14,
+        )
+        fig_b.write_html("outputs/animation2_scatter_cluster.html")
+        print("  Saved: outputs/animation2_scatter_cluster.html")
 
     # =========================================================================
     # RUN FULL PIPELINE
@@ -503,5 +465,5 @@ class AerosolHumidityPipeline:
 
 
 if __name__ == "__main__":
-    pipeline = AerosolHumidityPipeline(filepath="data/dataset_original.csv")
+    pipeline = ConfidenceCalibrationPipeline(filepath="data/dataset_original.csv")
     pipeline.run()
